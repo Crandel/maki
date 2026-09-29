@@ -44,6 +44,7 @@ const PLACEHOLDER_SUGGESTIONS: &[&str] = &[
     "remove dead code",
 ];
 const QUEUE_PLACEHOLDER: &str = "Queue another prompt...";
+const STEER_PLACEHOLDER: &str = "Queue a message for this subagent...";
 const ASK_PREFIX: &str = "Ask maki to ";
 const ASK_SUFFIX: &str = "...";
 const BLANK_PLACEHOLDER: &str = " ";
@@ -53,6 +54,7 @@ pub enum Placeholder {
     Suggestion,
     Blank,
     Queue,
+    Steer,
 }
 
 pub enum InputAction {
@@ -401,6 +403,7 @@ impl InputBox {
                     ],
                 ),
                 Placeholder::Queue => (QUEUE_PLACEHOLDER, Vec::new()),
+                Placeholder::Steer => (STEER_PLACEHOLDER, Vec::new()),
                 Placeholder::Blank => (BLANK_PLACEHOLDER, Vec::new()),
             };
             let mut spans = vec![super::chevron_span()];
@@ -1176,6 +1179,7 @@ mod tests {
 
     #[test_case(Placeholder::Blank, "" ; "blank_shows_only_the_chevron")]
     #[test_case(Placeholder::Queue, QUEUE_PLACEHOLDER ; "queue_asks_for_another_prompt")]
+    #[test_case(Placeholder::Steer, STEER_PLACEHOLDER ; "steer_names_the_subagent")]
     fn placeholder_row(placeholder: Placeholder, expected: &str) {
         let mut input = InputBox::new(InputHistory::default(), 20);
         let terminal = render_input_with(&mut input, 40, 4, placeholder);
