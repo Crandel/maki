@@ -1511,7 +1511,7 @@ mod tests {
             model: None,
             opts: None,
             answer_tx,
-            steer: None,
+            inbox: None,
         }
     }
 

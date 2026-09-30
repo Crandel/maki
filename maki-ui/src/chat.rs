@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::app::tasks::{TaskOutcome, TaskStatus};
+use crate::components::input::Submission;
 use crate::components::messages::{MessagesPanel, PromptProgress, ScrollPos};
 use crate::components::tool_display::append_annotation;
 use crate::components::{DisplayMessage, DisplayRole, ToolRole, ToolStatus};
@@ -14,7 +15,7 @@ use crate::markdown::truncate_output;
 use crate::selection::{DocPos, RowPos, Selection};
 use maki_agent::tools::{MAIN_TASK_ID, ToolInvocation, ToolRegistry, WRITE_TOOL_NAME};
 use maki_agent::{
-    AgentEvent, BufferSnapshot, SteerKind, SteerQueue, ToolDoneEvent, ToolOutput, ToolStartEvent,
+    AgentEvent, BufferSnapshot, SteerKind, SubagentInbox, ToolDoneEvent, ToolOutput, ToolStartEvent,
 };
 use maki_config::{ToolKey, ToolOutputLines, UiConfig};
 use maki_lua::WinView;
@@ -35,7 +36,8 @@ const NUDGE_TEXT: &str = "Model stalled after tool calls, nudging...";
 const REWRITTEN_PREFIX: &str = "A plugin rewrote this message. The model got:";
 const DROPPED_PREFIX: &str = "A plugin kept this message from the model:";
 const CONTINUED_PREFIX: &str = "A plugin kept the agent going:";
-pub(crate) const STEER_DROPPED_SUFFIX: &str = " queued message(s) dropped: the subagent finished first";
+pub(crate) const INBOX_DROPPED_SUFFIX: &str =
+    " queued message(s) dropped: the subagent finished first";
 
 pub enum ChatEventResult {
     Continue,
@@ -67,7 +69,9 @@ pub struct Chat {
     pub opts: Option<RequestOptions>,
     /// A running subagent's inbox for messages typed in its chat. Taken when
     /// the chat finishes, since nothing would drain it after that.
-    pub(crate) steer: Option<Arc<SteerQueue>>,
+    pub(crate) inbox: Option<Arc<SubagentInbox>>,
+    /// Parked while another chat is in front, see `App::set_active_chat`.
+    pub(crate) draft: Submission,
     pending_turn_usage: Option<String>,
     messages_panel: MessagesPanel,
     /// The ending and the index of the bubble announcing it, so a later, better
@@ -95,7 +99,8 @@ impl Chat {
             context_size: 0,
             model_id: None,
             opts: None,
-            steer: None,
+            inbox: None,
+            draft: Submission::default(),
             pending_turn_usage: None,
             messages_panel,
             finish: None,
@@ -418,11 +423,11 @@ impl Chat {
             return;
         }
         self.messages_panel.flush();
-        let undelivered = self.steer.take().map_or(0, |steer| steer.len());
+        let undelivered = self.inbox.take().map_or(0, |inbox| inbox.len());
         if undelivered > 0 {
             self.messages_panel.push(DisplayMessage::new(
                 DisplayRole::Error,
-                format!("{undelivered}{STEER_DROPPED_SUFFIX}"),
+                format!("{undelivered}{INBOX_DROPPED_SUFFIX}"),
             ));
         }
         let bubble = self

@@ -230,7 +230,7 @@ impl App {
                 self.float_mgr.view_panel(frame, idx, rect);
             }
             let placeholder = if !self.is_main_chat() {
-                Placeholder::Steer
+                Placeholder::SubagentQueue
             } else if self.status == Status::Streaming {
                 Placeholder::Queue
             } else if self.state.session.messages().is_empty() {

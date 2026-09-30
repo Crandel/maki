@@ -44,7 +44,7 @@ const PLACEHOLDER_SUGGESTIONS: &[&str] = &[
     "remove dead code",
 ];
 const QUEUE_PLACEHOLDER: &str = "Queue another prompt...";
-const STEER_PLACEHOLDER: &str = "Queue a message for this subagent...";
+const SUBAGENT_QUEUE_PLACEHOLDER: &str = "Queue a message for this subagent...";
 const ASK_PREFIX: &str = "Ask maki to ";
 const ASK_SUFFIX: &str = "...";
 const BLANK_PLACEHOLDER: &str = " ";
@@ -54,7 +54,7 @@ pub enum Placeholder {
     Suggestion,
     Blank,
     Queue,
-    Steer,
+    SubagentQueue,
 }
 
 pub enum InputAction {
@@ -65,19 +65,13 @@ pub enum InputAction {
     None,
 }
 
+#[derive(Default)]
 pub struct Submission {
     pub text: String,
     pub images: Vec<ImageSource>,
 }
 
 impl Submission {
-    pub fn empty() -> Self {
-        Self {
-            text: String::new(),
-            images: Vec::new(),
-        }
-    }
-
     pub fn is_empty(&self) -> bool {
         self.text.is_empty() && self.images.is_empty()
     }
@@ -122,7 +116,7 @@ impl InputBox {
             KeyCode::Enter => {
                 return match self.submit() {
                     Some(sub) => InputAction::Submit(sub),
-                    None => InputAction::Submit(Submission::empty()),
+                    None => InputAction::Submit(Submission::default()),
                 };
             }
             _ => {}
@@ -276,6 +270,15 @@ impl InputBox {
         self.buffer.value().trim().is_empty() && self.pending_images.is_empty()
     }
 
+    pub fn swap_draft(&mut self, draft: Submission) -> Submission {
+        let text = self.buffer.value();
+        let images = mem::take(&mut self.pending_images);
+        self.discard();
+        self.set_input(draft.text);
+        self.pending_images = draft.images;
+        Submission { text, images }
+    }
+
     pub fn attach_image(&mut self, source: ImageSource) {
         self.pending_images.push(source);
     }
@@ -403,7 +406,7 @@ impl InputBox {
                     ],
                 ),
                 Placeholder::Queue => (QUEUE_PLACEHOLDER, Vec::new()),
-                Placeholder::Steer => (STEER_PLACEHOLDER, Vec::new()),
+                Placeholder::SubagentQueue => (SUBAGENT_QUEUE_PLACEHOLDER, Vec::new()),
                 Placeholder::Blank => (BLANK_PLACEHOLDER, Vec::new()),
             };
             let mut spans = vec![super::chevron_span()];
@@ -1179,7 +1182,7 @@ mod tests {
 
     #[test_case(Placeholder::Blank, "" ; "blank_shows_only_the_chevron")]
     #[test_case(Placeholder::Queue, QUEUE_PLACEHOLDER ; "queue_asks_for_another_prompt")]
-    #[test_case(Placeholder::Steer, STEER_PLACEHOLDER ; "steer_names_the_subagent")]
+    #[test_case(Placeholder::SubagentQueue, SUBAGENT_QUEUE_PLACEHOLDER ; "subagent_queue_names_the_subagent")]
     fn placeholder_row(placeholder: Placeholder, expected: &str) {
         let mut input = InputBox::new(InputHistory::default(), 20);
         let terminal = render_input_with(&mut input, 40, 4, placeholder);

@@ -550,6 +550,18 @@ impl App {
         self.is_main_chat() || !self.chats[self.active_chat].is_finished()
     }
 
+    /// One input box serves every chat, so the draft in it moves to the chat
+    /// being left and the new chat's draft comes back. Without this, `Enter`
+    /// in a subagent's chat would send a message typed for the main agent.
+    pub(super) fn set_active_chat(&mut self, idx: usize) {
+        if idx == self.active_chat {
+            return;
+        }
+        let draft = mem::take(&mut self.chats[idx].draft);
+        self.chats[self.active_chat].draft = self.input_box.swap_draft(draft);
+        self.active_chat = idx;
+    }
+
     fn plan_form_open(&self) -> bool {
         self.state.mode == Mode::Plan && self.plan_form.is_visible()
     }
@@ -1170,9 +1182,9 @@ impl App {
             }
             BuiltinAction::EditInput => return vec![Action::EditInputInEditor],
             BuiltinAction::PopQueue => self.pop_active_queue(),
-            BuiltinAction::PrevChat => self.active_chat = self.active_chat.saturating_sub(1),
+            BuiltinAction::PrevChat => self.set_active_chat(self.active_chat.saturating_sub(1)),
             BuiltinAction::NextChat => {
-                self.active_chat = (self.active_chat + 1).min(self.chats.len() - 1);
+                self.set_active_chat((self.active_chat + 1).min(self.chats.len() - 1));
             }
             BuiltinAction::ModelPicker => {
                 self.model_picker.open(&self.state.model.spec());
@@ -1278,7 +1290,7 @@ impl App {
     }
 
     /// A message typed while watching a running subagent is for that
-    /// subagent, see [`Self::steer_subagent`]. `Esc` follows the chat in front
+    /// subagent, see [`Self::queue_for_subagent`]. `Esc` follows the chat in front
     /// too: armed twice in a running subagent's chat it cancels that subagent
     /// alone. A finished subagent's chat has no input, so only the mode
     /// toggle answers there.
@@ -1408,7 +1420,7 @@ impl App {
             return vec![];
         }
         if !self.is_main_chat() {
-            return self.steer_subagent(sub.into());
+            return self.queue_for_subagent(sub.into());
         }
         if sub.text.trim() == "exit" {
             return self.quit();
@@ -1742,7 +1754,7 @@ impl App {
         chat.set_restore_channel(self.restore_event_tx.clone());
         chat.model_id = subagent.model.clone();
         chat.opts = subagent.opts;
-        chat.steer = subagent.steer.clone();
+        chat.inbox = subagent.inbox.clone();
         if let Some(ref prompt) = subagent.prompt {
             chat.push_user_message(prompt);
         }

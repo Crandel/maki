@@ -8,11 +8,11 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use crate::{AgentInput, ExtractedCommand, InterruptSource};
 
 #[derive(Default)]
-pub struct SteerQueue {
+pub struct SubagentInbox {
     items: Mutex<VecDeque<AgentInput>>,
 }
 
-impl SteerQueue {
+impl SubagentInbox {
     pub fn push(&self, input: AgentInput) {
         self.lock().push_back(input);
     }
@@ -41,7 +41,7 @@ impl SteerQueue {
     }
 }
 
-impl InterruptSource for SteerQueue {
+impl InterruptSource for SubagentInbox {
     fn poll(&self) -> Option<ExtractedCommand> {
         let mut items = self.lock();
         if items.is_empty() {
@@ -51,9 +51,9 @@ impl InterruptSource for SteerQueue {
     }
 }
 
-impl fmt::Debug for SteerQueue {
+impl fmt::Debug for SubagentInbox {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SteerQueue")
+        f.debug_struct("SubagentInbox")
             .field("len", &self.len())
             .finish()
     }
@@ -82,7 +82,7 @@ mod tests {
 
     #[test]
     fn poll_drains_the_burst_in_order_and_empties_the_queue() {
-        let queue = SteerQueue::default();
+        let queue = SubagentInbox::default();
         assert!(queue.poll().is_none());
         queue.push(input("a"));
         queue.push(input("b"));
@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn remove_takes_one_entry_by_position() {
-        let queue = SteerQueue::default();
+        let queue = SubagentInbox::default();
         queue.push(input("a"));
         queue.push(input("b"));
         assert_eq!(queue.remove(0).map(|i| i.message).as_deref(), Some("a"));

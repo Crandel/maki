@@ -1094,7 +1094,7 @@ pub struct SubagentInfo {
     /// Where a host queues messages for this subagent. Its loop drains the
     /// queue between turns, so a message lands as a user interrupt.
     #[serde(skip)]
-    pub steer: Option<Arc<crate::SteerQueue>>,
+    pub inbox: Option<Arc<crate::SubagentInbox>>,
 }
 
 #[derive(Debug, Clone)]
