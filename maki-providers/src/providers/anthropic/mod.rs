@@ -410,14 +410,18 @@ impl Anthropic {
         self
     }
 
-    fn build_request(&self, method: &str, path: &str) -> isahc::http::request::Builder {
-        let auth = self.auth.lock().unwrap();
-        let base = auth
-            .base_url
+    /// Where requests go. Everything that asks "is this the real API?" must ask
+    /// here, or a plugin's `base_url` (kept in the fallback) reads as Anthropic.
+    fn base_url<'a>(&'a self, auth: &'a super::ResolvedAuth) -> &'a str {
+        auth.base_url
             .as_deref()
             .or(self.fallback_base_url.as_deref())
-            .unwrap_or(API_ORIGIN);
-        let url = format!("{}{path}", origin(base));
+            .unwrap_or(API_ORIGIN)
+    }
+
+    fn build_request(&self, method: &str, path: &str) -> isahc::http::request::Builder {
+        let auth = self.auth.lock().unwrap();
+        let url = format!("{}{path}", origin(self.base_url(&auth)));
         auth.configure_request(
             Request::builder()
                 .method(method)
@@ -522,8 +526,7 @@ impl Provider for Anthropic {
 
             let (top_p, anthropic_api) = {
                 let auth = self.auth.lock().unwrap();
-                let base_url = auth.base_url.as_deref().unwrap_or(API_ORIGIN);
-                (auth.top_p, is_anthropic_api(base_url))
+                (auth.top_p, is_anthropic_api(self.base_url(&auth)))
             };
             let mut body = shared::build_request_body_with_system(
                 model,
@@ -828,6 +831,19 @@ mod tests {
         .with_fallback_base_url(Some(THIRD_PARTY_BASE_URL.into()));
         smol::block_on(provider.reload_auth()).unwrap();
         assert_eq!(provider.auth.lock().unwrap().headers, headers);
+    }
+
+    #[test_case(None, true ; "no_fallback_is_anthropic")]
+    #[test_case(Some(THIRD_PARTY_BASE_URL), false ; "plugin_fallback_is_third_party")]
+    fn fallback_base_url_decides_anthropic_api(fallback: Option<&str>, expected: bool) {
+        let auth = crate::providers::ResolvedAuth::for_test(None, Vec::new());
+        let provider = Anthropic::with_auth(
+            Arc::new(Mutex::new(auth)),
+            crate::providers::Timeouts::default(),
+        )
+        .with_fallback_base_url(fallback.map(String::from));
+        let auth = provider.auth.lock().unwrap();
+        assert_eq!(is_anthropic_api(provider.base_url(&auth)), expected);
     }
 
     #[test]
