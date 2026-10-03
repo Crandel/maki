@@ -774,7 +774,8 @@ fn run_tool_search(
     let tool_id: Arc<str> = Arc::from(TOOL_SEARCH_TOOL_NAME);
     let query = input["query"].as_str().unwrap_or_default();
     emit_raw_start(ctx, origin, &id, &tool_id, query.to_owned(), input);
-    let (output, is_error) = match mcp.search_tools(query, origin) {
+    let deferral = ToolDeferral::for_model(&ctx.model);
+    let (output, is_error) = match mcp.search_tools(query, origin, deferral) {
         Ok(found) => (found, false),
         Err(e) => (e.into(), true),
     };
