@@ -524,10 +524,10 @@ fn add_stdio(lua: &Lua, ctx: &Table) -> LuaResult<()> {
     )?;
     ctx.set(
         "prompt",
-        lua.create_function(|_, opts: Table| {
+        lua.create_async_function(|_, opts: Table| async move {
             let label: String = opts.get("label").unwrap_or_default();
             let secret = opts.get::<Option<bool>>("secret")?.unwrap_or(false);
-            Ok(read_answer(&label, secret))
+            Ok(smol::unblock(move || read_answer(&label, secret)).await)
         })?,
     )?;
     ctx.set(
@@ -539,7 +539,8 @@ fn add_stdio(lua: &Lua, ctx: &Table) -> LuaResult<()> {
     )
 }
 
-/// Reads one line of an answer from the terminal.
+/// Reads one line of an answer from the terminal, off the Lua thread so a slow
+/// typist does not trip the 5s watchdog.
 ///
 /// A secret is read with the terminal in raw mode so the characters never reach
 /// the scrollback, and echoed as mask characters so there is still feedback
