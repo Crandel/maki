@@ -314,6 +314,11 @@ impl Provider for Google {
 
     fn reload_auth(&self) -> BoxFuture<'_, Result<(), AgentError>> {
         Box::pin(async {
+            // Credentials handed in through `with_auth` belong to the caller,
+            // and our vendor key must never follow them to a third-party origin.
+            if self.key_pool.is_none() {
+                return Ok(());
+            }
             let pool = KeyPool::resolve(SLUG, ENV_VAR)?;
             *self.auth.lock().unwrap() =
                 resolve_auth_from_key(pool.current(), self.resolved_base_url.clone())?;

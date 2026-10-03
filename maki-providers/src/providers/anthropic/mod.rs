@@ -560,6 +560,11 @@ impl Provider for Anthropic {
 
     fn reload_auth(&self) -> BoxFuture<'_, Result<(), AgentError>> {
         Box::pin(async {
+            // Credentials handed in through `with_auth` belong to the caller,
+            // and our vendor key must never follow them to a third-party origin.
+            if self.key_pool.is_none() {
+                return Ok(());
+            }
             let pool = KeyPool::resolve("anthropic", ENV_VAR)?;
             *self.auth.lock().unwrap() =
                 resolve_auth_from_key(pool.current(), self.resolved_base_url.clone())?;
@@ -810,6 +815,19 @@ mod tests {
             None,
             provider.resolved_base_url.as_deref()
         ));
+    }
+
+    #[test]
+    fn reload_auth_keeps_caller_owned_credentials() {
+        let headers = vec![("authorization".to_owned(), "Bearer gateway".to_owned())];
+        let auth = crate::providers::ResolvedAuth::for_test(None, headers.clone());
+        let provider = Anthropic::with_auth(
+            Arc::new(Mutex::new(auth)),
+            crate::providers::Timeouts::default(),
+        )
+        .with_fallback_base_url(Some(THIRD_PARTY_BASE_URL.into()));
+        smol::block_on(provider.reload_auth()).unwrap();
+        assert_eq!(provider.auth.lock().unwrap().headers, headers);
     }
 
     #[test]
