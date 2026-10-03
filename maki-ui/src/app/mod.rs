@@ -567,6 +567,16 @@ impl App {
         self.active_chat = idx;
     }
 
+    /// The session's draft is the main agent's, which the box only holds while
+    /// the main chat is in front.
+    pub(super) fn main_draft(&self) -> String {
+        if self.is_main_chat() {
+            self.input_box.buffer.value()
+        } else {
+            self.chats[0].draft.text.clone()
+        }
+    }
+
     fn plan_form_open(&self) -> bool {
         self.state.mode == Mode::Plan && self.plan_form.is_visible()
     }
