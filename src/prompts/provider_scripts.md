@@ -25,6 +25,8 @@ Scripts to port:
 - `base`: keep `base = "<same>"` when it is one of `anthropic`, `openai`, `google`, `copilot`, `ollama`, `llama-cpp`, `zai`, `opencode`, `xai` or `aperture`.
   Any other old base (`mistral`, `deepseek`, `openrouter`, `requesty`, `synthetic`, `regolo`, `tensorx`) is no longer valid.
   Use `codec = "openai"` instead, with that provider's API origin as `base_url` when `resolve` did not return one.
+  The old base also shaped every request (thinking, reasoning fields, headers, token limits), and that now lives in its bundled plugin.
+  Copy its `openai` table, `max_output_tokens` and any `build_body` hook from https://github.com/tontinton/maki/blob/main/plugins/<base>/init.lua into the new plugin, or the provider loses them.
 - `models`: becomes the `models` table.
   Each `"id": "x"` becomes `prefixes = { "x" }`, and every other field keeps its name and default.
   Rows describe models but do not limit the list: without a `list_models` hook, maki also lists what the API's model endpoint serves.
