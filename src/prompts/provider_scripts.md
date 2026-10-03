@@ -13,7 +13,7 @@ Scripts to port:
 - If you are maki, load the `maki-plugin-dev` skill.
   Otherwise read https://maki.sh/docs/providers/#plugin-providers and https://maki.sh/docs/lua-api/#maki-provider-register.
   They define the API. Do not guess field names: an unknown key fails registration.
-- Read each script's source.
+{old_maki}- Read each script's source.
   You may run `<script> info` and `<script> models` to see the JSON they print.
   Do not run `resolve`, `refresh`, `reload`, `login` or `logout`: they print live credentials or wait for my input.
 - Do not change, move or delete the scripts or any credential file they use.
@@ -81,7 +81,7 @@ Scripts to port:
 
 For each slug:
 
-1. `maki models 2>&1 | grep -E '^warning|^<slug>/'` lists the models I had before, with no `warning:` line about the plugin.
+1. `maki models 2>&1 | grep -E '^warning|^<slug>/'` lists {expected_models}, with no `warning:` line about the plugin.
    A provider that needs a login may warn that it is not logged in. That warning is expected until I log in.
 2. When the credentials come from an imported file, an environment variable or a command, send one real request: `maki -p -m <slug>/<model> "Reply with OK"`.
    When they need a login, stop and ask me to run `maki auth login <slug>`, then send the request.

@@ -396,6 +396,14 @@ maki "$(maki migrate providers)"
 maki migrate providers | pbcopy
 ```
 
+If a script was your only way to reach a model, the new maki has no model to run the prompt with. Use the binary that `maki update` replaced, which it keeps in the state directory. Releases before 0.5.8 still run scripts, and when the backup is one of them, `maki migrate providers` shows the command:
+
+```bash
+~/.local/state/maki/maki_backup "$(maki migrate providers)"
+```
+
+With the old binary, the agent also checks that each plugin lists the same models the script did. The next `maki update` overwrites the backup, so port your scripts before you update again. Without a backup, paste the prompt into another agent.
+
 Each plugin keeps its script's file name as the slug, so saved models and `maki auth login <slug>` keep working. The warning for a script stops once a plugin registers its slug. The prompt tells the agent to leave the scripts and their credential files in place, and to tell you which ones you can delete once every check passes.
 
 To port a script by hand, map each subcommand to part of the registration:

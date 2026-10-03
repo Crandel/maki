@@ -3,14 +3,19 @@
 //! replaced yet, so startup can say so and `maki migrate providers` can hand
 //! the user a prompt that ports them.
 
+use std::fmt::Write;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use maki_providers::plugin;
 use maki_providers::spec::ProviderRegistry;
 use maki_storage::paths::{self, tilde};
+use maki_storage::{StateDir, model, version};
+
+use crate::update;
 
 const PROVIDERS_DIR: &str = "providers";
 const INIT_FILE: &str = "init.lua";
@@ -20,6 +25,19 @@ const SCRIPTS_SLOT: &str = "{scripts}";
 const PROVIDERS_DIR_SLOT: &str = "{providers_dir}";
 const CONFIG_DIR_SLOT: &str = "{config_dir}";
 const LOGS_DIR_SLOT: &str = "{logs_dir}";
+const OLD_MAKI_SLOT: &str = "{old_maki}";
+const EXPECTED_MODELS_SLOT: &str = "{expected_models}";
+const PATH_SLOT: &str = "{path}";
+const OLD_MAKI_STEP: &str = "- My previous maki, which still runs these scripts, is at `{path}`.\n  Before you write any file, run `{path} models` and keep the lines for these slugs: the plugins must list the same models.\n";
+const OLD_MAKI_MODELS: &str = "the same models `{path} models` listed for it";
+const SCRIPT_MODELS: &str =
+    "the models the script's `models` printed, or its base's catalog when it has no `models`";
+const USED_MODELS: &str =
+    ", including every model I used with it (listed next to the script above)";
+const VERSION_FLAG: &str = "--version";
+const VERSION_PREFIX: &str = "maki ";
+/// Every release before this one still ships the script loader.
+const FIRST_RELEASE_WITHOUT_SCRIPTS: &str = "0.5.8";
 #[cfg(unix)]
 const EXECUTABLE_BITS: u32 = 0o111;
 #[cfg(not(unix))]
@@ -28,6 +46,63 @@ const SCRIPT_EXTENSIONS: [&str; 4] = ["exe", "bat", "cmd", "ps1"];
 pub struct Script {
     pub slug: String,
     pub path: PathBuf,
+}
+
+/// What the agent checks a port against, since the running maki can no longer
+/// show what a script used to serve.
+pub struct Reference {
+    pub old_maki: Option<PathBuf>,
+    pub saved_models: Vec<String>,
+}
+
+impl Reference {
+    pub fn find() -> Self {
+        Self {
+            old_maki: old_maki(),
+            saved_models: saved_models(),
+        }
+    }
+
+    fn used_with<'a>(&'a self, script: &'a Script) -> impl Iterator<Item = &'a String> {
+        self.saved_models.iter().filter(|spec| {
+            spec.strip_prefix(script.slug.as_str())
+                .is_some_and(|rest| rest.starts_with('/'))
+        })
+    }
+}
+
+/// The binary `maki update` replaced, when it is old enough to still run the
+/// scripts, and so can run the porting agent and show what the scripts served.
+fn old_maki() -> Option<PathBuf> {
+    let path = update::backup_path().ok()?;
+    let output = Command::new(&path)
+        .arg(VERSION_FLAG)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    (output.status.success() && runs_scripts(&String::from_utf8_lossy(&output.stdout)))
+        .then_some(path)
+}
+
+fn runs_scripts(version_output: &str) -> bool {
+    version_output
+        .trim()
+        .strip_prefix(VERSION_PREFIX)
+        .is_some_and(|version| version::is_newer(FIRST_RELEASE_WITHOUT_SCRIPTS, version))
+}
+
+fn saved_models() -> Vec<String> {
+    let Ok(state) = StateDir::resolve() else {
+        return Vec::new();
+    };
+    let mut specs = model::read_recents(&state);
+    if let Some(current) = model::read_model(&state)
+        && !specs.contains(&current)
+    {
+        specs.insert(0, current);
+    }
+    specs
 }
 
 /// The directory the script loader read, found the way it found it.
@@ -83,12 +158,26 @@ pub fn unknown_provider_hint(slug: &str) -> Option<String> {
         })
 }
 
-pub fn prompt(providers_dir: &Path, scripts: &[Script]) -> String {
+pub fn prompt(providers_dir: &Path, scripts: &[Script], reference: &Reference) -> String {
     let list = scripts
         .iter()
-        .map(|script| format!("- `{}`: {}", script.slug, script.path.display()))
+        .map(|script| script_line(script, reference))
         .collect::<Vec<_>>()
         .join("\n");
+    let old_maki = reference
+        .old_maki
+        .as_ref()
+        .map(|path| path.display().to_string());
+    let mut expected_models = old_maki.as_ref().map_or_else(
+        || SCRIPT_MODELS.to_owned(),
+        |path| OLD_MAKI_MODELS.replace(PATH_SLOT, path),
+    );
+    if scripts
+        .iter()
+        .any(|script| reference.used_with(script).next().is_some())
+    {
+        expected_models.push_str(USED_MODELS);
+    }
     let logs_dir = paths::logs_dir().map_or_else(
         |_| "maki's log directory".to_owned(),
         |dir| dir.display().to_string(),
@@ -100,7 +189,24 @@ pub fn prompt(providers_dir: &Path, scripts: &[Script]) -> String {
             &plugin_dir(providers_dir).display().to_string(),
         )
         .replace(LOGS_DIR_SLOT, &logs_dir)
+        .replace(
+            OLD_MAKI_SLOT,
+            &old_maki.map_or_else(String::new, |path| OLD_MAKI_STEP.replace(PATH_SLOT, &path)),
+        )
+        .replace(EXPECTED_MODELS_SLOT, &expected_models)
         .replace(SCRIPTS_SLOT, &list)
+}
+
+fn script_line(script: &Script, reference: &Reference) -> String {
+    let mut line = format!("- `{}`: {}", script.slug, script.path.display());
+    let used: Vec<String> = reference
+        .used_with(script)
+        .map(|spec| format!("`{spec}`"))
+        .collect();
+    if !used.is_empty() {
+        let _ = write!(line, " (models I used: {})", used.join(", "));
+    }
+    line
 }
 
 fn warning(dir: &Path, scripts: &[Script]) -> String {
@@ -163,6 +269,7 @@ mod tests {
     const SCRIPT_BODY: &str = "#!/bin/sh\n";
     const PORTABLE: &str = "acme";
     const SECOND: &str = "zeta-proxy";
+    const OLD_MAKI: &str = "/state/maki/maki_backup";
 
     fn script(slug: &str) -> Script {
         Script {
@@ -241,22 +348,64 @@ mod tests {
         }
     }
 
-    #[test]
-    fn prompt_fills_every_slot() {
+    #[test_case(None ; "without_old_maki")]
+    #[test_case(Some(OLD_MAKI) ; "with_old_maki")]
+    fn prompt_fills_every_slot(old_maki: Option<&str>) {
         let scripts = [script(PORTABLE), script(SECOND)];
-        let text = prompt(Path::new("/cfg/providers"), &scripts);
+        let reference = Reference {
+            old_maki: old_maki.map(PathBuf::from),
+            saved_models: Vec::new(),
+        };
+        let text = prompt(Path::new("/cfg/providers"), &scripts, &reference);
 
         for slot in [
             SCRIPTS_SLOT,
             PROVIDERS_DIR_SLOT,
             CONFIG_DIR_SLOT,
             LOGS_DIR_SLOT,
+            OLD_MAKI_SLOT,
+            EXPECTED_MODELS_SLOT,
+            PATH_SLOT,
         ] {
             assert!(!text.contains(slot), "{slot} left unfilled");
         }
         for script in &scripts {
-            let line = format!("- `{}`: {}", script.slug, script.path.display());
+            let line = format!("- `{}`: {}\n", script.slug, script.path.display());
             assert!(text.contains(&line), "{line:?} missing");
         }
+        let old_models = format!("`{OLD_MAKI} models`");
+        assert_eq!(text.contains(&old_models), old_maki.is_some());
+        assert_eq!(text.contains(SCRIPT_MODELS), old_maki.is_none());
+        assert!(!text.contains(USED_MODELS));
+    }
+
+    #[test]
+    fn prompt_lists_saved_models_under_their_own_script() {
+        let scripts = [script(PORTABLE), script(SECOND)];
+        let reference = Reference {
+            old_maki: None,
+            saved_models: ["acme/big", "acme-two/other", "anthropic/opus", "acme/small"]
+                .map(String::from)
+                .to_vec(),
+        };
+        let text = prompt(Path::new("/cfg/providers"), &scripts, &reference);
+
+        assert!(
+            text.contains(
+                "- `acme`: /cfg/providers/acme (models I used: `acme/big`, `acme/small`)\n"
+            )
+        );
+        assert!(text.contains("- `zeta-proxy`: /cfg/providers/zeta-proxy\n"));
+        assert!(text.contains(USED_MODELS));
+    }
+
+    #[test_case("maki 0.5.7\n", true ; "last_release_with_scripts")]
+    #[test_case("maki 0.2.0", true ; "old_release")]
+    #[test_case("maki 0.5.8", false ; "first_release_without_scripts")]
+    #[test_case("maki 1.0.0", false ; "newer_release")]
+    #[test_case("maki garbage", false ; "unparsable_version")]
+    #[test_case("", false ; "no_output")]
+    fn runs_scripts_only_before_the_removal(output: &str, expected: bool) {
+        assert_eq!(runs_scripts(output), expected);
     }
 }
