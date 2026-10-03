@@ -22,6 +22,7 @@ use crate::provider::{BoxFuture, Provider};
 use crate::spec::{BASES, ProviderRegistry, ProviderSpec};
 use crate::{AgentError, Message, ProviderEvent, ProviderUsage, RequestOptions, StreamResponse};
 
+use super::catalog;
 use super::codec::{self, BodyHook, CodecOptions, RequestCtx};
 pub use super::codec::{EffortField, OpenAiWire, SessionCarrier, ThinkingWire};
 use super::{KeyHeader, KeyPool, KeyRotation, ResolvedAuth, Timeouts};
@@ -301,7 +302,7 @@ pub enum RegisterError {
     InvalidSlug(String),
     #[error("provider slug '{0}' is already defined in providers.toml")]
     ConfiguredSlug(String),
-    #[error("provider slug '{0}' belongs to a built-in provider")]
+    #[error("provider slug '{0}' belongs to a built-in or models.dev provider")]
     ReservedSlug(String),
     #[error("provider '{slug}': {message}")]
     Credentials { slug: String, message: String },
@@ -530,12 +531,15 @@ fn register_owned(
     if !is_valid_slug(&slug) {
         return Err(RegisterError::InvalidSlug(slug));
     }
-    // A third party on a slug maki ships would be handed the key the user
-    // saved for that provider. A bundled slug stays reserved even while its
-    // plugin is off, so turning a plugin off never frees the name.
+    // A third party on a slug maki ships or serves from models.dev would be
+    // handed the key the user saved for that provider, and would take over
+    // its models. A bundled slug stays reserved even while its plugin is off,
+    // so turning a plugin off never frees the name.
     let reserved = match authority {
         DeclAuthority::Bundled => ProviderRegistry::compiled(&slug).is_some(),
-        DeclAuthority::ThirdParty => ProviderRegistry::is_shipped(&slug),
+        DeclAuthority::ThirdParty => {
+            ProviderRegistry::is_shipped(&slug) || catalog::serves_slug(&slug)
+        }
     };
     if reserved {
         return Err(RegisterError::ReservedSlug(slug));
@@ -2456,6 +2460,31 @@ mod tests {
 
         assert!(matches!(error, RegisterError::ReservedSlug(_)), "{error}");
         assert!(!is_registered(slug), "{RESERVED_SLUG_TAKEN}");
+    }
+
+    /// `maki auth login` saves a models.dev provider's key under its slug, so
+    /// a package declaring that slug would be handed the key and take over
+    /// the provider's models.
+    #[test]
+    fn a_served_catalog_slug_is_reserved_for_third_parties() {
+        const CATALOG_SLUG: &str = "served-catalog";
+        let provider = catalog::schema::CatalogProvider {
+            name: DISPLAY_NAME.into(),
+            env: Vec::new(),
+            npm: catalog::ALLOWED_NPM[0].into(),
+            api: Some(EXAMPLE_BASE_URL.into()),
+            models: HashMap::new(),
+        };
+        catalog::seed_catalog_for_tests(
+            HashMap::from([(CATALOG_SLUG.into(), provider)]),
+            StateDir::from_path(Default::default()),
+        );
+
+        let error =
+            register_loaded_as(registration(CATALOG_SLUG), DeclAuthority::ThirdParty).unwrap_err();
+
+        assert!(matches!(error, RegisterError::ReservedSlug(_)), "{error}");
+        assert!(!is_registered(CATALOG_SLUG), "{RESERVED_SLUG_TAKEN}");
     }
 
     const UPSTREAM_SAID_NO: &str = "upstream said no";
