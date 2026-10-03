@@ -22,6 +22,8 @@ const CONFIG_DIR_SLOT: &str = "{config_dir}";
 const LOGS_DIR_SLOT: &str = "{logs_dir}";
 #[cfg(unix)]
 const EXECUTABLE_BITS: u32 = 0o111;
+#[cfg(not(unix))]
+const SCRIPT_EXTENSIONS: [&str; 4] = ["exe", "bat", "cmd", "ps1"];
 
 pub struct Script {
     pub slug: String,
@@ -42,9 +44,8 @@ pub fn scripts_in(dir: &Path) -> Vec<Script> {
     let mut scripts: Vec<Script> = entries
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| is_executable_file(path))
         .filter_map(|path| {
-            let slug = path.file_name()?.to_str()?.to_owned();
+            let slug = script_slug(&path)?.to_owned();
             (plugin::is_valid_slug(&slug) && !ProviderRegistry::is_shipped(&slug))
                 .then_some(Script { slug, path })
         })
@@ -132,15 +133,25 @@ fn plugin_dir(providers_dir: &Path) -> PathBuf {
         })
 }
 
+/// The slug the script loader gave a file it ran, `None` for one it skipped.
 #[cfg(unix)]
-fn is_executable_file(path: &Path) -> bool {
-    path.metadata()
-        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & EXECUTABLE_BITS != 0)
+fn script_slug(path: &Path) -> Option<&str> {
+    let meta = path.metadata().ok()?;
+    if !meta.is_file() || meta.permissions().mode() & EXECUTABLE_BITS == 0 {
+        return None;
+    }
+    path.file_name()?.to_str()
 }
 
+/// Windows has no executable bit, so the loader ran files by extension and
+/// named the provider after the stem: `acme.bat` was `acme`.
 #[cfg(not(unix))]
-fn is_executable_file(path: &Path) -> bool {
-    path.is_file()
+fn script_slug(path: &Path) -> Option<&str> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    if !path.is_file() || !SCRIPT_EXTENSIONS.contains(&extension.as_str()) {
+        return None;
+    }
+    path.file_stem()?.to_str()
 }
 
 #[cfg(test)]
@@ -178,6 +189,28 @@ mod tests {
         write(dir.path(), "anthropic", 0o755);
         write(dir.path(), "deepseek", 0o755);
         fs::create_dir(dir.path().join("subdir")).unwrap();
+
+        let slugs: Vec<String> = scripts_in(dir.path())
+            .into_iter()
+            .map(|script| script.slug)
+            .collect();
+
+        assert_eq!(slugs, [PORTABLE, SECOND]);
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn scripts_in_lists_only_what_the_loader_ran() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [
+            "zeta-proxy.CMD",
+            "acme.bat",
+            "notes.txt",
+            "no-extension",
+            "anthropic.exe",
+        ] {
+            fs::write(dir.path().join(name), "").unwrap();
+        }
 
         let slugs: Vec<String> = scripts_in(dir.path())
             .into_iter()
