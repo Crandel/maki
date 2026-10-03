@@ -569,7 +569,7 @@ impl App {
     /// the main chat is in front.
     pub(super) fn main_draft(&self) -> String {
         if self.is_main_chat() {
-            self.input_box.buffer.value()
+            self.input_box.draft_text()
         } else {
             self.chats[0].draft.text.clone()
         }
