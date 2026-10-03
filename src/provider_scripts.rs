@@ -65,7 +65,7 @@ pub fn unported(dir: &Path) -> Vec<Script> {
 pub fn startup_warning() -> Option<String> {
     let dir = providers_dir()?;
     let scripts = unported(&dir);
-    (!scripts.is_empty()).then(|| warning(&dir, &scripts))
+    (!scripts.is_empty()).then(|| maki_lua::sanitize_message(&warning(&dir, &scripts)))
 }
 
 /// Why `slug` is unknown, when an unported script is what used to serve it.

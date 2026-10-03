@@ -178,7 +178,6 @@ fn build_stack(
         },
     )?;
 
-    warnings.extend(provider_scripts::startup_warning());
     let commands = discover_commands(cli.no_commands, launch.cwd);
 
     setup::remember_thinking(&mut config.session_defaults, launch.storage);
@@ -376,7 +375,10 @@ pub fn run(mut cli: Cli) -> Result<()> {
     // mode that never opens the UI has to report them here or a broken
     // package fails in complete silence.
     if cli.is_sdk_mode() || cli.print {
-        for warning in &startup_warnings {
+        for warning in startup_warnings
+            .iter()
+            .chain(&provider_scripts::startup_warning())
+        {
             eprintln!("warning: {warning}");
         }
     }
@@ -473,6 +475,9 @@ pub fn run(mut cli: Cli) -> Result<()> {
                 focused,
                 startup_warnings: std::mem::take(&mut warnings),
                 startup_notice: notice.take(),
+                // Read per run: plugins have just (re)loaded, and a script one
+                // of them now replaces is no longer worth a word.
+                startup_alert: provider_scripts::startup_warning(),
                 storage: storage.clone(),
                 config: stack.config.agent.clone(),
                 ui_config: stack.config.ui.clone(),

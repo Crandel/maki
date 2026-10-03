@@ -98,6 +98,8 @@ pub struct EventLoopParams {
     pub focused: usize,
     pub startup_warnings: Vec<String>,
     pub startup_notice: Option<String>,
+    /// Shown in a popup that stays up until dismissed, not a flash.
+    pub startup_alert: Option<String>,
     pub storage: StateDir,
     pub config: AgentConfig,
     pub ui_config: UiConfig,
@@ -580,6 +582,7 @@ impl<'t> EventLoop<'t> {
             focused,
             mut startup_warnings,
             startup_notice,
+            startup_alert,
             storage,
             config,
             ui_config,
@@ -689,6 +692,9 @@ impl<'t> EventLoop<'t> {
         }
         for warning in startup_warnings {
             app.queue_flash(warning);
+        }
+        if let Some(alert) = startup_alert {
+            app.alert_modal.open(alert);
         }
 
         let (pack_tx, pack_rx) = flume::unbounded();
