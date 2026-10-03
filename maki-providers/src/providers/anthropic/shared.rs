@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 use crate::model::Model;
-use crate::types::is_deferred_tool;
+use crate::types::{is_deferred_tool, rejects_sampling};
 use crate::{
     AgentError, ContentBlock, EMPTY_RESPONSE_MARKER, InputTransformation, Message, ProviderEvent,
     Role, StopReason, StreamResponse, ThinkingConfig, TokenUsage,
@@ -382,6 +382,7 @@ pub(crate) fn build_request_body_with_system(
     });
     if let Some(top_p) = top_p
         && !thinking.is_enabled()
+        && !rejects_sampling(&model.id)
     {
         body["top_p"] = json!(top_p);
     }
@@ -629,11 +630,20 @@ mod tests {
         }
     }
 
-    #[test_case(ThinkingConfig::Off, true ; "off_sends_top_p")]
-    #[test_case(ThinkingConfig::Adaptive, false ; "thinking_omits_top_p")]
-    fn top_p_is_sent_unless_thinking(thinking: ThinkingConfig, sent: bool) {
+    #[test_case("claude-test", ThinkingConfig::Off, true ; "off_sends_top_p")]
+    #[test_case("claude-test", ThinkingConfig::Adaptive, false ; "thinking_omits_top_p")]
+    #[test_case("claude-opus-4-7", ThinkingConfig::Off, false ; "adaptive_only_model_omits_top_p")]
+    fn top_p_is_sent_unless_thinking_or_adaptive_only(
+        model_id: &str,
+        thinking: ThinkingConfig,
+        sent: bool,
+    ) {
+        let model = Model {
+            id: model_id.into(),
+            ..test_model()
+        };
         let body = build_request_body_with_system(
-            &test_model(),
+            &model,
             &[Message::user("hi".into())],
             &[SystemBlock {
                 r#type: "text",

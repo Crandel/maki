@@ -589,6 +589,13 @@ fn claude_version(model_id: &str) -> Option<(&str, (u32, u32))> {
     Some((family, (major, minor)))
 }
 
+/// The releases that made thinking adaptive-only also reject any sampling
+/// parameter (`top_p`, `temperature`) with a 400, even with thinking off.
+/// Reads the id, not the provider, so a gateway serving Claude is covered too.
+pub(crate) fn rejects_sampling(model_id: &str) -> bool {
+    ThinkingConfig::requires_adaptive(model_id)
+}
+
 /// How a provider's effort knob speaks: which levels its API accepts, what
 /// `adaptive` means there, and whether "off" needs an explicit string.
 /// New providers add a const in [`dialect`]; providers with dynamic model
