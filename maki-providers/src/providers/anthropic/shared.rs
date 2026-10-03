@@ -189,9 +189,14 @@ fn deferred_tool_names(tools: &Value) -> HashSet<&str> {
 /// server was up degrades to text once that server is gone. And it refuses
 /// a `tool_result` mixing references with anything else, so the text is
 /// displaced to a sibling block.
+///
+/// Each name is referenced once per request, by the first result that loaded
+/// it. Every later call records the load again so compaction cannot drop the
+/// only reference, but referencing it each time would pull every later
+/// output out of its own result, leaving the model to pair them by order.
 fn wire_block<'a>(
     block: &'a ContentBlock,
-    deferred: &HashSet<&str>,
+    unreferenced: &mut HashSet<&str>,
 ) -> (WireBlock<'a>, Option<&'a str>) {
     let ContentBlock::ToolResult {
         tool_use_id,
@@ -212,7 +217,7 @@ fn wire_block<'a>(
     };
     let refs: Vec<Value> = loaded_tools
         .iter()
-        .filter(|name| deferred.contains(name.as_str()))
+        .filter(|name| unreferenced.remove(name.as_str()))
         .map(|name| json!({"type": "tool_reference", "tool_name": name}))
         .collect();
     let (parts, displaced) = if refs.is_empty() {
@@ -250,7 +255,10 @@ fn is_replayable(block: &ContentBlock) -> bool {
 /// A message left with no block at all is rejected too, so it falls back to
 /// the marker. Displaced texts go after every result, since the API wants
 /// all `tool_result` blocks first.
-fn wire_content<'a>(msg: &'a Message, deferred: &HashSet<&str>) -> Vec<WireContentBlock<'a>> {
+fn wire_content<'a>(
+    msg: &'a Message,
+    unreferenced: &mut HashSet<&str>,
+) -> Vec<WireContentBlock<'a>> {
     let plain = |inner| WireContentBlock {
         inner,
         cache_control: None,
@@ -261,7 +269,7 @@ fn wire_content<'a>(msg: &'a Message, deferred: &HashSet<&str>) -> Vec<WireConte
         .iter()
         .filter(|block| is_replayable(block))
         .map(|block| {
-            let (inner, text) = wire_block(block, deferred);
+            let (inner, text) = wire_block(block, unreferenced);
             displaced.extend(text);
             plain(inner)
         })
@@ -282,12 +290,12 @@ fn wire_content<'a>(msg: &'a Message, deferred: &HashSet<&str>) -> Vec<WireConte
 /// that protocol must go through it. `tools` must be the request's own
 /// array: it decides which recorded loads may replay as references.
 pub(crate) fn wire_messages<'a>(messages: &'a [Message], tools: &Value) -> Vec<WireMessage<'a>> {
-    let deferred = deferred_tool_names(tools);
+    let mut unreferenced = deferred_tool_names(tools);
     messages
         .iter()
         .map(|msg| WireMessage {
             role: &msg.role,
-            content: wire_content(msg, &deferred),
+            content: wire_content(msg, &mut unreferenced),
         })
         .collect()
 }

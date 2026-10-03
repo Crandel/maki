@@ -1254,6 +1254,30 @@ data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":5}}\n";
         assert_eq!(content[3]["text"], OTHER_TEXT);
     }
 
+    /// Every call to a deferred tool records its load, and only the first
+    /// one in the request references it, so later outputs stay in their own
+    /// result rather than in an unlabeled sibling text.
+    #[test]
+    fn a_tool_is_referenced_once_per_request() {
+        const LATER_TEXT: &str = "second call";
+        let mut messages = search_result(&[DEFERRED_TOOL]);
+        let mut later = search_result(&[DEFERRED_TOOL]);
+        set_result(&mut later, |content, _| *content = LATER_TEXT.into());
+        messages.append(&mut later);
+
+        let wire: Value =
+            serde_json::to_value(build_wire_messages(&messages, &deferred_tools())).unwrap();
+        assert_eq!(
+            wire[1]["content"],
+            json!([{
+                "type": "tool_result",
+                "tool_use_id": "t1",
+                "content": [{"type": "text", "text": LATER_TEXT}],
+                "cache_control": {"type": "ephemeral"},
+            }])
+        );
+    }
+
     #[test]
     fn result_without_loads_replays_verbatim() {
         assert_eq!(
