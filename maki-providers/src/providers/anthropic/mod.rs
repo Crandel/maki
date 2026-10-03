@@ -301,13 +301,18 @@ fn first_party(base_url: &str, configured_override: Option<&str>) -> bool {
 
 /// Subscription quota only exists for OAuth tokens against the real Anthropic
 /// API; API keys and anthropic-protocol third-party endpoints have none.
-fn usage_eligible(auth: &super::ResolvedAuth, configured_override: Option<&str>) -> bool {
+fn usage_eligible(
+    auth: &super::ResolvedAuth,
+    fallback_base_url: Option<&str>,
+    configured_override: Option<&str>,
+) -> bool {
     auth.headers
         .iter()
         .any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
         && auth
             .base_url
             .as_deref()
+            .or(fallback_base_url)
             .is_none_or(|url| first_party(url, configured_override))
 }
 
@@ -335,6 +340,9 @@ pub struct Anthropic {
     /// Env / `providers.toml` / inventory default, resolved once at construction.
     /// Reused by key rotation / reload so they do not re-parse providers.toml.
     resolved_base_url: Option<String>,
+    /// Where a codec caller sends requests when its auth carries no origin.
+    /// Kept out of the auth cell, because an origin there outranks the user's.
+    fallback_base_url: Option<String>,
 }
 
 impl Anthropic {
@@ -350,6 +358,7 @@ impl Anthropic {
             system_prefix: None,
             stream_timeout: timeouts.stream,
             resolved_base_url,
+            fallback_base_url: None,
         })
     }
 
@@ -367,6 +376,7 @@ impl Anthropic {
             // anthropic override would make every third-party endpoint look
             // first party and poll `/api/oauth/usage` against it.
             resolved_base_url: None,
+            fallback_base_url: None,
         }
     }
 
@@ -375,9 +385,18 @@ impl Anthropic {
         self
     }
 
+    pub(crate) fn with_fallback_base_url(mut self, base_url: Option<String>) -> Self {
+        self.fallback_base_url = base_url;
+        self
+    }
+
     fn build_request(&self, method: &str, path: &str) -> isahc::http::request::Builder {
         let auth = self.auth.lock().unwrap();
-        let base = auth.base_url.as_deref().unwrap_or(API_ORIGIN);
+        let base = auth
+            .base_url
+            .as_deref()
+            .or(self.fallback_base_url.as_deref())
+            .unwrap_or(API_ORIGIN);
         let url = format!("{}{path}", origin(base));
         auth.configure_request(
             Request::builder()
@@ -534,6 +553,7 @@ impl Provider for Anthropic {
         Box::pin(async move {
             if !usage_eligible(
                 &self.auth.lock().unwrap(),
+                self.fallback_base_url.as_deref(),
                 self.resolved_base_url.as_deref(),
             ) {
                 return Ok(None);
@@ -741,7 +761,7 @@ mod tests {
             base_url.map(String::from),
             vec![(header.into(), "token".into())],
         );
-        assert_eq!(usage_eligible(&auth, None), expected);
+        assert_eq!(usage_eligible(&auth, None, None), expected);
     }
 
     #[test]
@@ -757,6 +777,7 @@ mod tests {
         assert!(provider.resolved_base_url.is_none());
         assert!(!usage_eligible(
             &provider.auth.lock().unwrap(),
+            None,
             provider.resolved_base_url.as_deref()
         ));
     }
@@ -767,9 +788,10 @@ mod tests {
             Some(THIRD_PARTY_BASE_URL.into()),
             vec![("Authorization".into(), "token".into())],
         );
-        assert!(usage_eligible(&auth, Some(THIRD_PARTY_BASE_URL)));
+        assert!(usage_eligible(&auth, None, Some(THIRD_PARTY_BASE_URL)));
         assert!(!usage_eligible(
             &auth,
+            None,
             Some("https://other-proxy.example.com")
         ));
     }

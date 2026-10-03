@@ -410,6 +410,8 @@ To port a script by hand, map each subcommand to part of the registration:
 
 A script whose `base` was `mistral`, `deepseek`, `openrouter`, `requesty`, `synthetic`, `regolo` or `tensorx` uses `codec = "openai"` now, with that provider's origin as `base_url`. Those providers are Lua plugins themselves, so they cannot be a `base`.
 
+A static `base_url` only works with `codec`. A script that kept its `base` and returned a `base_url` from `resolve` returns it from the `auth` hook now.
+
 A script that kept credentials in its own file can import them on first use, so nobody has to log in again. Call this from a hook, since `maki.provider.auth.set` only works inside one:
 
 ```lua

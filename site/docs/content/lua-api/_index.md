@@ -3925,7 +3925,9 @@ it does for a built-in provider.
   `base` (string) A native provider to borrow whole, e.g. `"ollama"`.
           Prefer `codec` for a new provider.
   `base_url` (string) Default origin. Must be `https`, or `http` on
-          loopback, and its host must match `net_hosts`.
+          loopback, and its host must match `net_hosts`. Only with
+          `codec`. A `base` moves only to an origin the `auth` hook
+          returns, so plans with a `base_url` need a `codec` too.
   `api_key_env` (string) Env var holding the API key, re-read each time
           the provider is built. Sent as `x-api-key` for anthropic,
           `x-goog-api-key` for google, and a bearer token otherwise.

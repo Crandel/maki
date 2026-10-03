@@ -31,6 +31,7 @@ mod spec;
 const BUILD_BODY_OPTION: &str = "build_body hook";
 const SYSTEM_PREFIX_OPTION: &str = "system_prefix";
 const OPENAI_OPTION: &str = "openai";
+const BASE_URL_OPTION: &str = "base_url";
 const HTTPS_SCHEME: &str = "https";
 const HTTP_SCHEME: &str = "http";
 const LOCALHOST: &str = "localhost";
@@ -392,6 +393,16 @@ fn honours_system_prefix(target: Target) -> bool {
     target.spec().slug != super::google::SLUG
 }
 
+/// A base is the native provider whole, and the native only moves for an
+/// origin in its auth, which only an auth hook writes. A static one would be
+/// dropped and the key sent to the vendor's own host.
+fn honours_base_url(target: Target) -> bool {
+    match target {
+        Target::Codec(_) => true,
+        Target::Base(_) => false,
+    }
+}
+
 pub fn is_valid_slug(s: &str) -> bool {
     !s.is_empty()
         && s.as_bytes()[0].is_ascii_alphanumeric()
@@ -625,6 +636,11 @@ fn target_of(decl: &ProviderDecl, hooks: &ProviderHooks) -> Result<Target, Regis
     }
     if decl.openai.is_some() && !honours_openai_wire(target) {
         return Err(unsupported(OPENAI_OPTION));
+    }
+    let states_origin =
+        decl.base_url.is_some() || decl.plans.iter().any(|plan| plan.base_url.is_some());
+    if states_origin && !honours_base_url(target) {
+        return Err(unsupported(BASE_URL_OPTION));
     }
     Ok(target)
 }
@@ -1469,6 +1485,15 @@ mod tests {
         }
     }
 
+    /// Borrows `base` whole, so it states no origin of its own.
+    fn based(slug: &str, base: &str) -> Registration {
+        let mut reg = registration(slug);
+        reg.decl.codec = None;
+        reg.decl.base = Some(base.to_string());
+        reg.decl.base_url = None;
+        reg
+    }
+
     /// A test registers the way a plugin load does: open the window, register,
     /// publish. Entries from the previous load go, exactly as on a `/reload`.
     fn register_loaded(reg: Registration) -> Result<(), RegisterError> {
@@ -1833,9 +1858,11 @@ mod tests {
         const SLUG: &str = "header-plugin";
         const ENV_VAR: &str = "MAKI_TEST_HEADER_PLUGIN_KEY";
         const KEY: &str = "sk-header";
-        let mut reg = registration(SLUG);
+        let mut reg = match base {
+            Some(base) => based(SLUG, base),
+            None => registration(SLUG),
+        };
         reg.decl.codec = codec;
-        reg.decl.base = base.map(str::to_string);
         reg.decl.api_key_env = Some(ENV_VAR.to_string());
         unsafe { std::env::set_var(ENV_VAR, KEY) };
         register_loaded(reg).unwrap();
@@ -1884,10 +1911,7 @@ mod tests {
     #[test]
     fn the_anthropic_base_lends_fast_mode() {
         const SLUG: &str = "fast-plugin";
-        let mut reg = registration(SLUG);
-        reg.decl.codec = None;
-        reg.decl.base = Some(super::super::anthropic::SLUG.to_string());
-        register_loaded(reg).unwrap();
+        register_loaded(based(SLUG, super::super::anthropic::SLUG)).unwrap();
 
         let fast_id = ProviderRegistry::compiled(super::super::anthropic::SLUG)
             .unwrap()
@@ -1906,10 +1930,7 @@ mod tests {
     #[test]
     fn a_base_lends_the_rows_a_declaration_leaves_out() {
         const SLUG: &str = "lending-plugin";
-        let mut reg = registration(SLUG);
-        reg.decl.codec = None;
-        reg.decl.base = Some(super::super::anthropic::SLUG.to_string());
-        register_loaded(reg).unwrap();
+        register_loaded(based(SLUG, super::super::anthropic::SLUG)).unwrap();
 
         let base = ProviderRegistry::compiled(super::super::anthropic::SLUG).unwrap();
         let lent = base
@@ -2041,6 +2062,47 @@ mod tests {
         assert_eq!(requests.lock().unwrap().len(), 1, "{REJECTED_TWICE}");
     }
 
+    /// Anthropic and Google know their vendor's host, so before they took the
+    /// declared origin a key meant for a gateway went to the vendor instead.
+    #[test_case(Protocol::Anthropic, "anthropic-origin-plugin" ; "anthropic")]
+    #[test_case(Protocol::Google, "google-origin-plugin" ; "google")]
+    fn every_codec_posts_to_the_declared_origin(protocol: Protocol, slug: &str) {
+        const ENV_VAR: &str = "MAKI_TEST_CODEC_ORIGIN_KEY";
+        const KEY: &str = "sk-gateway";
+        const PROMPT: &str = "hi";
+        const SCRIPT: &[Canned] = &[Canned::json(401, r#"{"error":{"message":"no"}}"#)];
+        const MISSED_ORIGIN: &str = "the request did not reach the declared origin";
+
+        let (base_url, requests) = serve(SCRIPT);
+        let host = Url::parse(&base_url)
+            .unwrap()
+            .host_str()
+            .unwrap()
+            .to_owned();
+        unsafe { std::env::set_var(ENV_VAR, KEY) };
+        let mut reg = registration(slug);
+        reg.decl.codec = Some(protocol);
+        reg.decl.base_url = Some(base_url);
+        reg.decl.net_hosts = vec![host];
+        reg.decl.api_key_env = Some(ENV_VAR.to_string());
+        register_loaded(reg).unwrap();
+
+        let provider = create(slug, Timeouts::default()).unwrap();
+        let model = Model::from_spec(&format!("{slug}/{MODEL_ID}")).unwrap();
+        let (tx, _rx) = flume::unbounded();
+        let _ = smol::block_on(provider.stream_message(
+            &model,
+            &[Message::user(PROMPT.to_owned())],
+            "",
+            &serde_json::json!([]),
+            &tx,
+            RequestOptions::default(),
+            None,
+        ));
+
+        assert_eq!(requests.lock().unwrap().len(), 1, "{MISSED_ORIGIN}");
+    }
+
     /// Only an origin the user or maki chose skips the side-call guard, never
     /// the one a third-party decl wrote.
     #[test_case(DeclAuthority::ThirdParty, None, None ; "third_party_declared_origin")]
@@ -2091,11 +2153,10 @@ mod tests {
     #[test_case(Some(BUILTIN_SLUG) ; "base_lends_its_provider")]
     fn undeclared_curation_and_limits(base: Option<&str>) {
         const SLUG: &str = "defaults-plugin";
-        let mut reg = registration(SLUG);
-        if let Some(base) = base {
-            reg.decl.codec = None;
-            reg.decl.base = Some(base.to_string());
-        }
+        let reg = match base {
+            Some(base) => based(SLUG, base),
+            None => registration(SLUG),
+        };
         register_loaded(reg).unwrap();
 
         let row = spec(SLUG).unwrap();
@@ -2316,6 +2377,12 @@ mod tests {
         reg.decl.system_prefix = Some(SOME_SYSTEM_PREFIX.to_string());
     }
 
+    /// A base only moves for an origin its auth hook returns.
+    fn base_url_on_a_base(reg: &mut Registration) {
+        reg.decl.codec = None;
+        reg.decl.base = Some(super::super::anthropic::SLUG.to_string());
+    }
+
     fn base_url_off_the_declared_hosts(reg: &mut Registration) {
         reg.decl.base_url = Some(UNDECLARED_BASE_URL.to_string());
     }
@@ -2340,6 +2407,7 @@ mod tests {
     #[test_case(openai_wire_on_anthropic, |e| matches!(e, RegisterError::Unsupported { option, .. } if *option == OPENAI_OPTION) ; "openai_table_needs_the_openai_codec")]
     #[test_case(system_prefix_on_google, |e| matches!(e, RegisterError::Unsupported { .. }) ; "google_drops_the_system_prefix")]
     #[test_case(system_prefix_on_the_google_base, |e| matches!(e, RegisterError::Unsupported { .. }) ; "so_does_the_google_base")]
+    #[test_case(base_url_on_a_base, |e| matches!(e, RegisterError::Unsupported { option, .. } if *option == BASE_URL_OPTION) ; "base_url_needs_a_codec")]
     #[test_case(base_url_off_the_declared_hosts, |e| matches!(e, RegisterError::UndeclaredBaseUrl(_)) ; "base_url_must_be_declared")]
     #[test_case(base_url_over_plain_http, |e| matches!(e, RegisterError::UndeclaredBaseUrl(_)) ; "base_url_must_be_https")]
     #[test_case(plan_off_the_declared_hosts, |e| matches!(e, RegisterError::UndeclaredBaseUrl(_)) ; "plan_base_url_must_be_declared")]
